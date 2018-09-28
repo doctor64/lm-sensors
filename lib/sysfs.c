@@ -798,10 +798,10 @@ static int sensors_add_hwmon_device(const char *path, const char *classdev)
 
 		/* The attributes we want might be those of the hwmon class
 		   device, or those of the device itself. */
-		err = sensors_read_one_sysfs_chip(linkpath, device_p, path);
+		err = sensors_read_one_sysfs_chip(device, device_p, path);
 		if (err == 0)
-			err = sensors_read_one_sysfs_chip(linkpath, device_p,
-							  linkpath);
+			err = sensors_read_one_sysfs_chip(device, device_p,
+							  device);
 	}
 	if (err < 0)
 		return err;
