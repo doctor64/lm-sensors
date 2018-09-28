@@ -628,6 +628,7 @@ static int sensors_read_one_sysfs_chip(const char *dev_path,
 	char subsys_path[NAME_MAX], *subsys;
 	int sub_len;
 	sensors_chip_features entry;
+	char *my_dev_path = NULL;
 
 	/* ignore any device without name attribute */
 	if (!(entry.chip.prefix = sysfs_read_attr(hwmon_path, "name")))
@@ -646,25 +647,52 @@ static int sensors_read_one_sysfs_chip(const char *dev_path,
 		goto done;
 	}
 
-	/* Find bus type */
-	snprintf(linkpath, NAME_MAX, "%s/subsystem", dev_path);
-	sub_len = readlink(linkpath, subsys_path, NAME_MAX - 1);
-	if (sub_len < 0 && errno == ENOENT) {
-		/* Fallback to "bus" link for kernels <= 2.6.17 */
-		snprintf(linkpath, NAME_MAX, "%s/bus", dev_path);
+	my_dev_path = strdup(dev_path);
+	if (!my_dev_path)
+		sensors_fatal_error(__func__, "Out of memory");
+	while (1) {
+		/* Find bus type */
+		snprintf(linkpath, NAME_MAX, "%s/subsystem", my_dev_path);
 		sub_len = readlink(linkpath, subsys_path, NAME_MAX - 1);
-	}
-	if (sub_len < 0) {
-		/* Older kernels (<= 2.6.11) have neither the subsystem
-		   symlink nor the bus symlink */
-		if (errno == ENOENT)
-			subsys = NULL;
-		else
+		if (sub_len < 0 && errno == ENOENT) {
+			/* Fallback to "bus" link for kernels <= 2.6.17 */
+			snprintf(linkpath, NAME_MAX, "%s/bus", my_dev_path);
+			sub_len = readlink(linkpath, subsys_path, NAME_MAX - 1);
+		}
+		if (sub_len < 0) {
+			/* Older kernels (<= 2.6.11) have neither the subsystem
+			   symlink nor the bus symlink */
+			if (errno == ENOENT) {
+				subsys = NULL;
+				break;
+			} else {
+				goto exit_free;
+			}
+		} else {
+			subsys_path[sub_len] = '\0';
+			subsys = strrchr(subsys_path, '/') + 1;
+			if (!strcmp(subsys, "i2c")
+			    || !strcmp(subsys, "spi")
+			    || !strcmp(subsys, "pci")
+			    || !strcmp(subsys, "platform")
+			    || !strcmp(subsys, "of_platform")
+			    || !strcmp(subsys, "acpi")
+			    || !strcmp(subsys, "hid")
+			    || !strcmp(subsys, "mdio_bus")
+			    || !strcmp(subsys, "scsi")) {
+				break;
+			}
+		}
+		snprintf(linkpath, NAME_MAX, "%s/device", my_dev_path);
+		free(my_dev_path);
+		my_dev_path = realpath(linkpath, NULL);
+		if (my_dev_path == NULL) {
+			err = 0;
 			goto exit_free;
-	} else {
-		subsys_path[sub_len] = '\0';
-		subsys = strrchr(subsys_path, '/') + 1;
+		}
 	}
+	if (my_dev_path)
+		free(my_dev_path);
 
 	if ((!subsys || !strcmp(subsys, "i2c")) &&
 	    sscanf(dev_name, "%hd-%x", &entry.chip.bus.nr,
@@ -783,17 +811,16 @@ static int sensors_read_sysfs_chips_compat(void)
 static int sensors_add_hwmon_device(const char *path, const char *classdev)
 {
 	char linkpath[NAME_MAX];
-	char device[NAME_MAX], *device_p;
-	int dev_len, err;
+	char *device, *device_p;
+	int err;
 	(void)classdev; /* hide warning */
 
 	snprintf(linkpath, NAME_MAX, "%s/device", path);
-	dev_len = readlink(linkpath, device, NAME_MAX - 1);
-	if (dev_len < 0) {
+	device = realpath(linkpath, NULL);
+	if (device == NULL) {
 		/* No device link? Treat as virtual */
 		err = sensors_read_one_sysfs_chip(NULL, NULL, path);
 	} else {
-		device[dev_len] = '\0';
 		device_p = strrchr(device, '/') + 1;
 
 		/* The attributes we want might be those of the hwmon class
@@ -802,6 +829,7 @@ static int sensors_add_hwmon_device(const char *path, const char *classdev)
 		if (err == 0)
 			err = sensors_read_one_sysfs_chip(device, device_p,
 							  device);
+		free(device);
 	}
 	if (err < 0)
 		return err;
